@@ -67,11 +67,16 @@ select option {
   border-top: solid 1px #ccc;
   padding: 5px;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.config-editor-commands label {
+  margin-bottom: 0;
 }
 
 .config-editor-commands button {
-  padding: 3px 8px 8px 8px;
+  padding: 5px 8px;
   font-size: 14px;
 }
 

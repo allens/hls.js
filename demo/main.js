@@ -1,5 +1,10 @@
 import {sortObject, copyTextToClipboard} from './demo-utils'
 
+const STORAGE_KEYS = {
+  Editor_Persistence: 'hlsjs:config-editor-persist',
+  Hls_Config        : 'hlsjs:config'
+};
+
 const testStreams = require('../tests/test-streams');
 const defaultTestStreamUrl = testStreams['bbb'].url;
 const sourceURL = decodeURIComponent(getURLParam('src', defaultTestStreamUrl))
@@ -11,15 +16,16 @@ if (demoConfig) {
   demoConfig = {}
 }
 
+const hlsjsDefaults = {
+  debug: true,
+  enableWorker: true
+};
+
 let enableStreaming = getDemoConfigPropOrDefault('enableStreaming', true);
 let autoRecoverError = getDemoConfigPropOrDefault('autoRecoverError', true);
 let levelCapping = getDemoConfigPropOrDefault('levelCapping', -1);
 let limitMetrics = getDemoConfigPropOrDefault('limitMetrics', -1);
 let dumpfMP4 = getDemoConfigPropOrDefault('dumpfMP4', false);
-let hlsjsConfig = getDemoConfigPropOrDefault('hls', {
-  debug: true,
-  enableWorker: true
-});
 
 let bufferingIdx = -1;
 let selectedTestStream = null;
@@ -36,9 +42,12 @@ let events;
 let stats;
 let tracks;
 let fmp4Data;
-const configEditor = setupConfigEditor();
+let configPersistenceEnabled = false;
+let configEditor = null;
 
 $(document).ready(function() {
+  setupConfigEditor();
+
   Object.keys(testStreams).forEach((key) => {
     const stream = testStreams[key];
     const option = new Option(stream.description, key);
@@ -194,11 +203,12 @@ function loadSelectedStream() {
 
 
   // Extending both a demo-specific config and the user config which can override all
-  const hlsConfig = $.extend({}, { debug: true }, getUserHlsConfig());
+  const hlsConfig = $.extend({}, hlsjsDefaults, getEditorValue({ parse: true }));
 
   if (selectedTestStream && selectedTestStream.config) {
     console.info('[loadSelectedStream] extending hls config with stream-specific config: ', selectedTestStream.config);
-    $.extend(hlsConfig, selectedTestStream.config)
+    $.extend(hlsConfig, selectedTestStream.config);
+    updateConfigEditorValue(hlsConfig);
   }
 
   onDemoConfigChanged();
@@ -1109,49 +1119,96 @@ function getURLParam(sParam, defaultValue) {
 }
 
 function onDemoConfigChanged() {
-  const url = $('#streamURL').val();
-
   demoConfig = {
     enableStreaming,
     autoRecoverError,
     dumpfMP4,
     levelCapping,
     limitMetrics,
+  };
 
-    // overrides to be passed to the hls.js constructor
-    hls: getUserHlsConfig()
+  if (configPersistenceEnabled) {
+    persistEditorValue();
   }
 
-  const serializedDemoConfig = btoa(JSON.stringify(demoConfig))
+  const serializedDemoConfig = btoa(JSON.stringify(demoConfig));
+  const baseURL = document.URL.split('?')[0];
+  const streamURL = $('#streamURL').val();
+  const permalinkURL = `${baseURL}?src=${encodeURIComponent(streamURL)}&demoConfig=${serializedDemoConfig}`;
 
-  const baseURL = document.URL.split('?')[0]
-  const permalinkURL = baseURL + `?src=${encodeURIComponent(url)}&demoConfig=${serializedDemoConfig}`
-
-  $('#StreamPermalink').html('<a href="' + permalinkURL + '">' + permalinkURL + '</a>');
+  $('#StreamPermalink').html(`<a href="${permalinkURL}">${permalinkURL}</a>`);
 }
 
-function getUserHlsConfig() {
-  var value = configEditor.session.getValue();
+function onConfigPersistenceChanged(event) {
+  configPersistenceEnabled = event.target.checked;
+  localStorage.setItem(STORAGE_KEYS.Editor_Persistence, JSON.stringify(configPersistenceEnabled));
+
+  if (configPersistenceEnabled) {
+    persistEditorValue();
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.Hls_Config);
+  }
+}
+
+function getEditorValue(options) {
+  options = $.extend({ parse: false }, options || {});
+  const value = configEditor.session.getValue();
+
+  if (options.parse) {
+    try {
+      value = JSON.parse(value);
+    } catch (e) {
+      console.warn('[getEditorValue] could not parse editor value', e);
+      value = {};
+    }
+  }
+
+  return value;
+}
+
+function getPersistedHlsConfig() {
+  var value = localStorage.getItem(STORAGE_KEYS.Hls_Config);
+
+  if (value === null) {
+    return value;
+  }
 
   try {
     value = JSON.parse(value);
   } catch (e) {
-    console.warn('[getUserHlsConfig] could not parse user hls config', e);
+    console.warn('[getPersistedHlsConfig] could not hls config json', e);
     value = {};
   }
 
   return value;
 }
 
+function persistEditorValue() {
+  localStorage.setItem(STORAGE_KEYS.Hls_Config, getEditorValue());
+}
+
 function setupConfigEditor() {
-  const configEditor = ace.edit('config-editor');
+  configEditor = ace.edit('config-editor');
   configEditor.setTheme('ace/theme/github');
   configEditor.session.setMode('ace/mode/json');
 
-  const json = JSON.stringify(hlsjsConfig, null, 2)
-  configEditor.session.setValue(json);
+  const contents = hlsjsDefaults;
+  const shouldRestorePersisted = JSON.parse(localStorage.getItem(STORAGE_KEYS.Editor_Persistence)) === true;
 
-  return configEditor;
+  if (shouldRestorePersisted) {
+    $.extend(contents, getPersistedHlsConfig());
+  }
+
+  const elPersistence = document.querySelector('#configPersistence');
+  elPersistence.addEventListener('change', onConfigPersistenceChanged);
+  elPersistence.checked = shouldRestorePersisted;
+
+  updateConfigEditorValue(contents);
+}
+
+function updateConfigEditorValue(obj) {
+  const json = JSON.stringify(obj, null, 2);
+  configEditor.session.setValue(json);
 }
 
 function applyConfigEditorValue() {
